@@ -1,0 +1,826 @@
+; A) Check and delete unused variables.
+; 1. Check entire play(). 
+; 2. Change entire showScore(). 
+; 2.1. Add var gameOverDelay.
+; 3. Line 578-581 (for making sure the ball start below the brick). 
+; 4. Line 512 (for making sure the ball moves fully right). 
+; 5. Line 319 (for making sure the left wall does not get broken).
+; 6. Line 35,250 (Option 1).
+
+	.equ	kbd_flush,              $40
+	.equ	kbd_cntl,               $000
+	.equ	kbd_stat,               $000
+	.equ	kbd_data,               $001
+
+	.equ	tim_cntl,               $030
+	.equ	tim_stat,               $030
+	.equ	tim_value,              $031
+	.equ	tim_count,              $034
+	.equ	interrupt_ena,          $80
+	.equ	reset_ready_bit,        $40
+	.equ	start_after_load,       $10
+	.equ	enable_reset_and_start, $D0
+	.equ	enable_and_reset,       $C0
+
+	.equ	crt_buffer,		$100
+	.equ	bottom_right,		$313
+	.equ	crt_xreg,		$314
+	.equ	crt_yreg,		$315
+	.equ	crt_cntl,		$316
+	.equ	crt_data,		$317
+	.equ	crt_rows,		14
+	.equ	crt_cols,		38
+	.equ	clear_display,		$01
+	.equ	home,		$04
+	.equ	bell,		$06	 ; CHANGE
+
+	.equ	put_num,		$e00
+	.equ	get_num,		$e01
+	.equ	get_str,		$e04
+	.equ	put_str,		$e05
+	.equ	put_nl,		$e06
+	.equ	put_num2,		$e07	
+	.equ	put_chr,		$e08
+
+	.equ	bottom, 		13	
+	.equ 	max_right,		38
+	.equ	quit,		'x'
+
+	.equ	top,     		0
+	.equ	min_right, 		1
+	.equ	left,		4
+	.equ	right,		5
+	.equ	max_paddle_x,		33
+	.equ	left_arrow,             'K'
+	.equ	right_arrow,            'M'
+	.equ	start, 		' '	
+	.equ	no_key,		'n'
+	.equ	vertical_line,		'|'
+	.equ	horizontal_line,		'-'
+	.equ	ball_chr,		'O'
+
+	lds#	$e00
+	cie
+
+; int main()
+
+	lda#	0
+	sta	score
+	lda#	3
+	sta	lives
+
+	jsr	showIntro	; showIntro()
+	
+	psh#	ball_X	; startGame(...)
+	psh#	ball_Y
+	psh#	paddle_X
+	psh#	delta_X
+	psh#	delta_Y
+	psh	score
+	jsr	startGame
+	ads#	6
+
+	lda#	key_isr
+	sta	$FF8
+	lda#	enable_and_reset
+	outb	kbd_cntl
+
+	lda	play_delay
+	outw	tim_value
+
+	lda#	timer_isr
+	sta	$FFB
+	lda#	enable_reset_and_start
+	outb	tim_cntl
+	sie
+
+main_loop:	nop
+	jmp	main_loop
+
+; Sean timer_isr
+
+;timer_isr:	bgn#	1
+;	psha
+;	pshx
+;	
+;	inw	tim_value
+;	cma	play_delay
+;	jeq	timerISR3
+;	lda	lives
+;	cma#	0
+;	jne	timerISR2
+;	hlt
+;
+;timerISR2:	psh#	ball_X
+;	psh#	ball_Y
+;	psh#	paddle_X
+;	psh#	delta_X
+;	psh#	delta_Y
+;	psh 	score
+;	jsr	startGame
+;	ads#	6
+;	lda	play_delay
+;	outw	tim_value
+;
+;timerISR3:	psh#	score
+;	psh#	ball_X
+;	psh#	ball_Y
+;	psh#	delta_X
+;	psh#	delta_Y
+;	psh#	lives
+;	jsr	play
+;	ads#	6
+;	cma#	1
+;	jne	timerISR4
+;	psh	score
+;	psh	lives
+;	jsr	showScore
+;	ads#	2	
+;
+;timerISR4:	lda#	enable_reset_and_start
+;	outb	tim_cntl
+;	popx
+;	popa
+;	fin#	1
+;	rtn
+
+; My timer_isr
+
+timer_isr:	psha
+	inw	tim_value
+	cma	inter_delay
+	jne	timer_isr1
+	lda	play_delay
+	outw	tim_value
+
+	lda	lives
+	cma#	0
+	jle	timerISR_else
+
+	psh#	ball_X
+	psh#	ball_Y
+	psh#	paddle_X
+	psh#	delta_X
+	psh#	delta_Y
+	psh 	score
+	jsr	startGame
+	ads#	6
+	jmp	timer_done
+
+timerISR_else:	hlt
+
+timer_isr1:	psh#	score
+	psh#	ball_X
+	psh#	ball_Y
+	psh#	delta_X
+	psh#	delta_Y
+	psh#	lives
+	jsr	play
+	ads#	6
+	cma#	0
+	jeq	timer_done
+	psh	score
+	psh	lives
+	jsr	showScore
+	ads#	2
+
+timer_done:	lda#	enable_and_reset
+	outb	tim_cntl
+	popa	
+	irtn
+
+; int play(...)
+
+.equ	p_score,  7	
+.equ	p_ballX,  6
+.equ	p_ballY,  5
+.equ	p_deltaX, 4
+.equ	p_deltaY, 3
+.equ	p_lives,  2
+
+play:	bgn#	0
+	pshx
+
+	lda*	! p_ballX	
+	outb	crt_xreg
+	lda*	! p_ballY
+	outb	crt_yreg
+	lda#	start
+	outb	crt_data
+
+	lda#	200	; CHANGE 3 lines
+	outb	crt_xreg
+	outb	crt_yreg
+
+	psh	! p_ballX
+	psh	! p_ballY
+	psh	! p_deltaX
+	psh	! p_deltaY
+	jsr	getNewBallPos
+	ads#	4
+
+	lda*	! p_ballY
+	cma#	1
+	jne	play3
+	lda*	! p_ballX
+	tax
+	inb+	crt_buffer
+	cma#	' '
+	jne	play1
+	
+	lda#	200	; CHANGE 3 lines
+	outb	crt_xreg
+	outb	crt_yreg
+
+	lda#	0
+	jmp	play3
+
+play1:	cma#	'|'
+	jeq	myPlay
+	sbx#	1
+	inb+	crt_buffer
+	jmp	play1
+
+myPlay:	clr	p_i
+	lda	p_i
+myPlay_loop:	cma#	6
+	jeq	play2
+	lda#	' '
+	outb+	crt_buffer
+
+	lda#	bell	; CHANGE 2 lines
+	outb	crt_cntl
+
+	lda#	200	; CHANGE 3 lines
+	outb	crt_xreg
+	outb	crt_yreg
+
+	adx#	1
+	inc	p_i
+	lda	p_i
+	jmp	myPlay_loop
+
+play2:	inc*	! p_ballY
+	lda#	1
+	sta*	! p_deltaY
+	inc*	! p_score
+	lda*	! p_score
+	mod#	6
+	jne	play3
+	lda#	1
+	jmp	playDone
+
+play3:	cma#	bottom
+	jle	play4
+	dec*	! p_lives
+	lda#	1
+	jmp	playDone
+
+play4:	lda*	! p_ballX
+	outb	crt_xreg
+	lda*	! p_ballY
+	outb	crt_yreg
+	lda#	ball_chr
+	outb	crt_data
+	
+	lda#	200	; CHANGE 3 lines
+	outb	crt_xreg
+	outb	crt_yreg
+
+	lda#	0
+
+playDone:	popx
+	fin#	0
+	rtn
+
+; void getNewBallPos(...)
+
+.equ	g_ballX,  5
+.equ	g_ballY,  4
+.equ	g_deltaX, 3
+.equ	g_deltaY, 2
+
+getNewBallPos:	bgn#	0
+	
+	lda*	! g_deltaY
+	ada*	! g_ballY
+	sta*	! g_ballY
+	lda*	! g_deltaX
+	ada*	! g_ballX
+	sta*	! g_ballX
+
+	lda*	! g_ballY
+	cma#	bottom
+	jne	g_else
+
+	lda*	! g_ballY
+	sba#	1
+	mul#	crt_cols
+	sta	xr_ballY
+	lda*	! g_ballX
+	sba#	1
+	sta	xr_ballX
+	ldx	xr_ballY
+	adx	xr_ballX
+	inb+	crt_buffer
+	cma#	horizontal_line
+	jne	g_else
+	lda#	bottom
+	sba#	1
+	sta*	! g_ballY
+	lda	g_negOne
+	sta*	! g_deltaY
+	jmp	g_if1
+
+g_else:	lda*	! g_ballY
+	cma#	0
+	jge	g_if1
+	lda#	0
+	sta*	! g_ballY
+	lda#	1
+	sta*	! g_deltaY
+
+g_if1:	lda*	! g_ballX
+	cma#	1	; CHANGE
+	jne	g_else1
+	lda#	2
+	sta*	! g_ballX
+	lda#	1
+	sta*	! g_deltaX
+	jmp	g_exit
+
+g_else1:	lda#	max_right
+	cma*	! g_ballX
+	jne	g_exit
+	lda#	max_right
+	sba#	2
+	sta*	! g_ballX
+	lda	g_negOne
+	sta*	! g_deltaX
+
+g_exit:	fin#	0
+	rtn
+
+; void showScore(int score, int lives)
+
+.equ	sS_score, 3
+.equ	sS_lives, 2
+
+showScore:	bgn#	0
+	psha
+	pshx
+	
+	lda#	8
+	outb	crt_yreg
+	lda#	4
+	outb	crt_xreg
+	psh#	sS_scorePromp_len
+	psh#	sS_scorePromp
+	jsr	put_str
+	ads#	2
+	lda	! sS_score
+	jsr	put_num
+	
+	lda#	9
+	outb	crt_yreg
+	lda#	4
+	outb	crt_xreg
+	psh#	sS_livesPromp_len
+	psh#	sS_livesPromp
+	jsr	put_str
+	ads#	2
+	lda	! sS_lives
+	jsr	put_num
+	
+	cma#	0	
+	jne	cont_game
+	lda#	10
+	outb	crt_yreg
+	lda#	4
+	outb	crt_xreg
+	psh#	sS_gameOver_len
+	psh#	sS_gameOver
+	jsr	put_str
+	ads#	2
+
+cont_game:	lda	gameOverDelay
+	outw	tim_value
+	lda#	15
+	outb	crt_yreg
+	lda#	40
+	outb	crt_xreg
+
+	popx
+	popa
+	fin#	0
+	rtn
+	
+;showScore:	bgn#	0
+
+;	lda#	8
+;	outb	crt_yreg
+;	lda#	4
+;	outb	crt_xreg
+	
+;	lda#	0	
+;	sta	sP_i
+;	ldx#	0
+
+;score_loop:	cma#	sS_scorePromp_len
+;	jgt	print_score
+;	ldc	sS_scorePromp
+;	jsr	put_chr
+;	inc	sP_i
+;	adx#	1
+;	lda	sP_i
+;	jmp	score_loop
+
+;print_score:	lda	! sS_score
+;	jsr	put_num
+;	jsr	put_nl
+
+;print_lives:	lda#	9
+;	outb	crt_yreg
+;	lda#	4
+;	outb	crt_xreg
+;	lda#	0
+;	sta	sP_i
+;	ldx#	0
+;lives_loop:	cma#	sS_livesPromp_len
+;	jgt	print_lives1
+;	ldc	sS_livesPromp
+;	jsr	put_chr
+;	inc	sP_i
+;	adx#	1
+;	lda	sP_i
+;	jmp	lives_loop
+	
+;print_lives1:	lda	! sS_lives
+;	ada#	'0'	; CHECK. Line 253 of breakout.c
+;	cma#	0
+;	jne	sS_exit
+
+;	lda#	10
+;	outb	crt_yreg
+;	lda#	4
+;	outb	crt_xreg
+;	lda#	0
+;	sta	sP_i
+;	ldx#	0
+;game_loop:	cma#	sS_gameOver_len
+;	jgt	sS_exit
+;	ldc	sS_gameOver	
+;	jsr	put_chr
+;	inc	sP_i
+;	adx#	1
+;	lda	sP_i
+;	jmp	game_loop
+
+; refresh() and while(advanceTime(10000)). Line 256-257 of breakout.c
+
+;sS_exit:	fin#	0
+;	rtn
+
+; key_isr
+
+key_isr:	psha
+	lda#	0
+	outb	kbd_cntl
+	inb	kbd_data
+	cma#	quit
+	jne	key1
+	hlt
+
+key1:	cma#	$1B
+	jne	key_done
+
+key2:	inb	kbd_data
+	cma#	left_arrow
+	jeq	key3
+	cma#	right_arrow
+	jne	key_done
+
+key3:	psha
+	psh#	paddle_X
+	jsr	movePaddle
+	ads#	2
+
+key_done:	lda#	interrupt_ena
+	outb	kbd_cntl	
+	popa
+	irtn
+
+; void movePaddle(char key, int *x)
+
+.equ	mP_key, 3
+.equ	mP_x,   2
+
+movePaddle:	bgn#	0
+	psh*	! mP_x
+	psh#	start
+	jsr	showPaddle
+	ads#	2
+
+	lda	! mP_key
+	cma#	left_arrow
+	jne	mP_else
+	lda*	! mP_x
+	cma#	2
+	jle	mP_else
+	dec*	! mP_x
+	jmp	mP_cont
+
+mP_else:	lda	! mP_key
+	cma#	right_arrow
+	jne	mP_cont
+	lda*	! mP_x
+	cma#	max_paddle_x
+	jgt	mP_cont	; CHANGE
+	inc*	! mP_x
+
+mP_cont:	psh*	! mP_x
+	psh#	horizontal_line
+	jsr	showPaddle
+	ads#	2
+	
+	fin#	0
+	rtn
+	
+; void startGame(...)
+
+.equ	sG_ballX,   7
+.equ	sG_ballY,   6
+.equ	sG_paddleX, 5
+.equ	sG_deltaX,  4
+.equ	sG_deltaY,  3
+.equ	sG_score,   2
+
+startGame:	bgn#	0
+	psha
+	pshx
+
+	lda	play_delay
+	outw	tim_value
+	lda#	clear_display
+	outb	crt_cntl
+
+	lda	! sG_score
+	mod#	6
+	cma#	0
+	jne	sG_else
+	
+	psh	! sG_score	; CHECK why is score passed
+	jsr	clearCRT
+	ads#	1
+	jmp	sG_cont
+
+sG_else:	lda#	8
+	outb	crt_yreg
+	lda#	4
+	outb	crt_xreg
+	lda	sG_space
+	outb	crt_data
+	lda#	9
+	outb	crt_yreg
+	lda#	4
+	outb	crt_xreg
+	lda	sG_space
+	outb	crt_data
+	lda#	bottom
+	outb	crt_yreg
+	lda#	1
+	outb	crt_xreg
+	lda	sG_bot_bord
+	outb	crt_data
+	
+sG_cont:	psh#	8
+	jsr	random2
+	ads#	1
+	ada#	4
+	sta	sG_ballX_rhs
+	lda#	max_right
+	div#	2
+	sba	sG_ballX_rhs
+	sta*	! sG_ballX
+
+	lda#	2	; CHANGE 4 lines
+	sta*	! sG_ballY
+	lda#	1
+	sta*	! sG_deltaY
+
+	psh#	1
+	jsr	random2
+	ads#	1
+	mul#	2
+	nega	
+	ada#	1
+	sta*	! sG_deltaX
+
+	lda#	max_right
+	div#	2
+	sba#	2
+	sta*	! sG_paddleX
+
+	psh*	! sG_paddleX
+	psh#	horizontal_line
+	jsr	showPaddle
+	ads#	2
+
+	; CHECK Line 279 of breakout.c (refresh())
+
+	popx	
+	popa	
+	fin#	0
+	rtn
+
+; void showPaddle(int x, char letter)
+
+.equ	sP_x, 3
+.equ	sP_letter,  2
+
+showPaddle:	bgn#	0
+	psha	
+
+	lda#	0
+	sta	sP_i
+
+sP_loop:	cma#	4
+	jeq	sP_exit
+	lda	! sP_x
+	outb	crt_xreg
+	lda#	bottom	
+	outb	crt_yreg
+	lda	! sP_letter
+	outb	crt_data
+
+	inc	! sP_x
+	inc	sP_i
+	lda	sP_i
+	jmp	sP_loop
+
+sP_exit:	lda#	200
+	outb	crt_xreg
+	outb	crt_yreg
+	
+	popa
+	fin#	0
+	rtn
+
+; void clearCRT() 
+
+clearCRT:	bgn#	0
+	psha
+	pshx
+
+	lda#	clear_display
+	outb	crt_cntl 
+	
+	psh#	cC_bricks_len
+	psh#	cC_bricks
+	jsr	put_str
+	ads#	2
+
+; CHECK: The inner loop is not necessary. 
+border:	lda#	1
+	sta	cC_j
+	lda#	2
+	sta	cC_i
+
+cC_outer:	cma#	crt_rows
+	jge	cC_exit
+	outb	crt_yreg
+	lda#	1	
+	outb	crt_xreg
+	lda	sG_bot_bord
+	outb	crt_data
+	lda	cC_j
+
+cC_inner:	cma#	crt_cols
+	jgt	cC_cont_b
+	outb	crt_xreg
+	lda#	start
+	outb	crt_data
+	inc	cC_j
+	lda	cC_j
+	jmp	cC_inner
+
+cC_cont_b:	lda	cC_i
+	outb	crt_yreg
+	lda#	1
+	outb	crt_xreg
+	lda#	vertical_line
+	outb	crt_data
+	lda	cC_i
+	outb	crt_yreg
+	lda#	38
+	outb	crt_xreg
+	lda#	vertical_line
+	outb	crt_data
+	inc	cC_i
+	lda	cC_i
+	jmp	cC_outer	; CHECK line 84 of breakout.cpp
+
+cC_exit:	popx
+	popa
+	fin#	0
+	rtn
+
+; void showIntro()
+
+showIntro:	bgn#	0
+	psha
+
+	lda#	clear_display
+	outb	crt_cntl
+
+	psh#	showIntro1_len
+	psh#	showIntro1
+	jsr	put_str
+	ads#	2
+	jsr	put_nl
+
+	psh#	showIntro2_len
+	psh#	showIntro2
+	jsr	put_str
+	ads#	2
+	jsr	put_nl
+
+	psh#	showIntro3_len
+	psh#	showIntro3
+	jsr	put_str
+	ads#	2	
+	jsr	put_nl
+
+	lda#	kbd_flush
+	outb	kbd_cntl
+
+sI_loop:	inb	kbd_stat
+	jeq	sI_loop
+	inb	kbd_data
+	cma#	start
+	jne	sI_loop	
+
+	popa
+	fin#	0
+	rtn
+
+; int random2(int max)
+
+.equ	r_max, 2
+
+random2:	bgn#	0
+	lda#	1
+	sta	r_seed
+	mul#	2779
+	ada#	1997
+	mod#	2048
+	sta	r_seed
+	inc	! r_max
+	mod	! r_max
+
+	fin#	0
+	rtn
+
+; end
+
+gameOverDelay:	.word	25000
+inter_delay:	.word 12500 ; # of timer iterations while ??? (Game Over) shown
+play_delay:	.word	1500 ; # of iterations before ???
+
+key:	.char	'n'
+score:	.word
+lives:	.word
+paddle_X:	.word
+ball_X:	.word
+ball_Y:	.word
+delta_X:	.word
+delta_Y:	.word
+
+xr_ballX:	.word
+xr_ballY:	.word
+
+p_square:	.word
+p_i:	.word
+p_playEndX:	.word
+
+g_negOne:	.word -1
+
+sS_scorePromp:	.char	'Score:', sS_scorePromp_len
+sS_livesPromp:	.char	'Lives:', sS_livesPromp_len
+sS_gameOver:	.char	'Game Over', sS_gameOver_len
+
+sG_space:	.char	'          '
+sG_bot_bord:	.char '|                                     |' 
+sG_ballX_rhs:	.word
+
+sP_i:	.word
+
+cC_bricks:	.char	'||____||____||____||____||____||____||', cC_bricks_len
+cC_i:	.word
+cC_j:	.word
+
+r_seed:	.word
+
+showIntro1:	.char	'1. Beep noise when brick is hit.', showIntro1_len
+showIntro2:	.char	'2. Debris fall when brick is hit.', showIntro2_len
+showIntro3:	.char	'3. Sticky paddle - Press ''s''.', showIntro3_len
