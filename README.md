@@ -1,6 +1,2 @@
-Date: 07/2015
-Class: ECS50
-Profesor: Sean Davis
-University of California, Davis.
-
-Game that involves breaking a wall of bricks by deflecting a ball using paddle. Written in CUSP.
+# Breakout
+Made a simplistic version of the popular game Breakout in CUSP (assembly language). The objective of the game is to break a wall of bricks by deflecting a ball off of a moving paddle. 
